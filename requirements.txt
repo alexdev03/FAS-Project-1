@@ -1,4 +1,1 @@
-flask
-pandas
-matplotlib
-requests
+# no external dependencies needed — only standard library
