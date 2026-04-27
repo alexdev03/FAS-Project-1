@@ -3,7 +3,7 @@ COLLECT_OUT := data/collect_latest.csv
 LOGS_OUT    := data/logs_latest.csv
 DB          := data/metrics.db
 
-.PHONY: all setup collect analyze report dashboard clean
+.PHONY: all setup collect analyze report dashboard autocommit loop clean
 
 all: collect analyze report
 
@@ -34,8 +34,14 @@ report: reports/
 
 # ---- Dashboard web -------------------------------------------------------
 dashboard:
-	@echo "[dashboard] Avvio Flask su http://localhost:5000"
 	$(PYTHON) dashboard/app.py
+
+# ---- Raccolta automatica + push ------------------------------------------
+autocommit:
+	bash collect/autocommit.sh
+
+loop:
+	bash collect/autocommit.sh --loop
 
 # ---- Utility -------------------------------------------------------------
 data/:

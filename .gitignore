@@ -1,4 +1,6 @@
 data/metrics.db
+data/collect_latest.csv
+data/logs_latest.csv
 reports/*.png
 .venv/
 __pycache__/
