@@ -19,7 +19,7 @@ get_config() {
 }
 
 REPO=$(get_config "repo")
-INTERVAL=$(get_config "intervallo")
+INTERVAL=$(get_config "interval")
 INTERVAL="${INTERVAL:-600}"
 TOKEN="${GITHUB_TOKEN:-}"
 
