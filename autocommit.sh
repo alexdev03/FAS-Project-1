@@ -36,7 +36,7 @@ run_cycle() {
     local ts
     ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-    python3 "$ROOT/process.py"
+    bash "$ROOT/collect.sh"
 
     git -C "$ROOT" add data/
 
@@ -47,8 +47,8 @@ run_cycle() {
     fi
 
     git -C "$ROOT" \
-        -c user.email="sysmetrics@localhost" \
-        -c user.name="sysmetrics" \
+        -c user.email="fas-project-1@unitn.it" \
+        -c user.name="alex" \
         commit -m "data: update CSV [$ts]"
 
     git -C "$ROOT" push origin master

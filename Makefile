@@ -6,7 +6,7 @@ all: run
 
 # single collection cycle
 run:
-	$(PYTHON) process.py
+	bash collect.sh
 
 # continuous loop with auto-commit (reads interval from config.ini)
 loop:

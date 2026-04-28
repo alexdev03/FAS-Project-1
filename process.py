@@ -5,106 +5,120 @@ import csv
 import os
 import re
 import subprocess
-import sys
-from datetime import datetime, timezone
+from datetime import datetime
 
-
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.ini")
-DATA_DIR    = os.path.join(os.path.dirname(__file__), "data")
+CONFIG = os.path.join(os.path.dirname(__file__), "config.ini")
+DATA   = os.path.join(os.path.dirname(__file__), "data")
 
 
 def load_config():
     cfg = configparser.ConfigParser()
-    cfg.read(CONFIG_PATH)
+    cfg.read(CONFIG)
     return cfg
 
 
-def collect_metrics():
-    script = os.path.join(os.path.dirname(__file__), "collect", "collect.sh")
-    result = subprocess.run(["bash", script], capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"collect.sh error: {result.stderr}", file=sys.stderr)
-        return None
-    return result.stdout.strip()
+# --- metrics -----------------------------------------------------------------
+
+def cpu_load():
+    # /proc/loadavg: 1-min 5-min 15-min ... (simpler than reading /proc/stat twice)
+    with open("/proc/loadavg") as f:
+        return f.read().split()[0]
 
 
-def collect_log_errors(regex_str, n_lines):
-    pattern = re.compile(regex_str, re.IGNORECASE)
+def ram_usage():
+    # grep MemTotal and MemAvailable from /proc/meminfo
+    with open("/proc/meminfo") as f:
+        lines = f.readlines()
 
-    # try journalctl first, fall back to /var/log/syslog
-    try:
-        out = subprocess.run(
-            ["journalctl", "-n", str(n_lines), "--no-pager", "-o", "short"],
-            capture_output=True, text=True
-        )
-        lines = out.stdout.splitlines()
-    except FileNotFoundError:
-        try:
-            with open("/var/log/syslog") as f:
-                lines = f.readlines()[-n_lines:]
-        except FileNotFoundError:
-            print("no log source found", file=sys.stderr)
-            return []
-
-    matches = []
+    info = {}
     for line in lines:
+        key, val = line.split(":")
+        info[key.strip()] = int(val.strip().split()[0])  # value in kB
+
+    total = info["MemTotal"] // 1024
+    used  = (info["MemTotal"] - info["MemAvailable"]) // 1024
+    return used, total
+
+
+def disk_usage():
+    # df prints disk usage — grab the percentage on /
+    result = subprocess.run(["df", "/", "--output=pcent"], capture_output=True, text=True)
+    pct = result.stdout.strip().splitlines()[-1].strip().replace("%", "")
+    return int(pct)
+
+
+# --- log errors --------------------------------------------------------------
+
+def grep_errors(regex, n_lines):
+    # use grep to filter journalctl output — same as shown in class
+    journal = subprocess.run(
+        ["journalctl", "-n", str(n_lines), "--no-pager"],
+        capture_output=True, text=True
+    )
+    if journal.returncode != 0:
+        return []
+
+    pattern = re.compile(regex, re.IGNORECASE)
+    matches = []
+    for line in journal.stdout.splitlines():
         if pattern.search(line):
+            # split on whitespace to get timestamp (first 3 fields) and message
             parts = line.split(None, 4)
-            if len(parts) >= 5:
-                ts  = " ".join(parts[:3])
-                msg = parts[4].strip()
-            else:
-                ts  = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                msg = line.strip()
+            ts  = " ".join(parts[:3]) if len(parts) >= 3 else ""
+            msg = parts[4].strip()   if len(parts) >= 5 else line.strip()
             matches.append((ts, msg))
 
     return matches
 
 
-def write_metrics(csv_line):
-    today = datetime.now().strftime("%Y-%m-%d")
-    path  = os.path.join(DATA_DIR, f"{today}.csv")
-    os.makedirs(DATA_DIR, exist_ok=True)
+# --- CSV writers -------------------------------------------------------------
 
-    is_new = not os.path.exists(path)
+def append_metrics(ts, load, mem_used, mem_total, disk_pct):
+    os.makedirs(DATA, exist_ok=True)
+    today = datetime.now().strftime("%Y-%m-%d")
+    path  = os.path.join(DATA, f"{today}.csv")
+
+    write_header = not os.path.exists(path)
     with open(path, "a", newline="") as f:
         w = csv.writer(f)
-        if is_new:
-            w.writerow(["timestamp", "cpu_pct", "mem_used_mb", "mem_total_mb",
-                        "disk_pct", "net_rx_bytes", "net_tx_bytes"])
-        w.writerow(csv_line.split(","))
+        if write_header:
+            w.writerow(["timestamp", "load_avg", "mem_used_mb", "mem_total_mb", "disk_pct"])
+        w.writerow([ts, load, mem_used, mem_total, disk_pct])
 
 
-def write_errors(errors):
+def append_errors(errors):
+    os.makedirs(DATA, exist_ok=True)
     today = datetime.now().strftime("%Y-%m-%d")
-    path  = os.path.join(DATA_DIR, f"{today}_errors.csv")
-    os.makedirs(DATA_DIR, exist_ok=True)
+    path  = os.path.join(DATA, f"{today}_errors.csv")
 
-    is_new = not os.path.exists(path)
+    write_header = not os.path.exists(path)
     with open(path, "a", newline="") as f:
         w = csv.writer(f)
-        if is_new:
+        if write_header:
             w.writerow(["timestamp", "message"])
-        for ts, msg in errors:
-            w.writerow([ts, msg])
+        w.writerows(errors)
 
+
+# -----------------------------------------------------------------------------
 
 def main():
     cfg     = load_config()
-    regex   = cfg.get("log", "regex",  fallback="error|failed")
+    regex   = cfg.get("log", "regex",  fallback="error|failed|critical")
     n_lines = cfg.getint("log", "lines", fallback=500)
 
-    metrics = collect_metrics()
-    if metrics:
-        write_metrics(metrics)
-        print(f"metrics: {metrics}")
+    ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    errors = collect_log_errors(regex, n_lines)
+    load             = cpu_load()
+    mem_used, mem_total = ram_usage()
+    disk             = disk_usage()
+
+    append_metrics(ts, load, mem_used, mem_total, disk)
+    print(f"[{ts}] load={load} mem={mem_used}/{mem_total}MB disk={disk}%")
+
+    errors = grep_errors(regex, n_lines)
     if errors:
-        write_errors(errors)
-        print(f"errors found: {len(errors)}")
-    else:
-        print("no errors matched the regex")
+        append_errors(errors)
+        print(f"[{ts}] {len(errors)} errors matched '{regex}'")
 
 
 if __name__ == "__main__":
