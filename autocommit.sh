@@ -4,18 +4,27 @@ IFS=$'\n\t'
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
+# load .env for the token (never tracked by git)
+if [ -f "$ROOT/.env" ]; then
+    # shellcheck disable=SC2046
+    export $(grep -v '^#' "$ROOT/.env" | xargs)
+else
+    echo "missing .env — copy .env.example to .env and set GITHUB_TOKEN"
+    exit 1
+fi
+
 # read a key from config.ini
 get_config() {
     grep "^$1" "$ROOT/config.ini" | sed 's/.*= *//' | tr -d '[:space:]'
 }
 
 REPO=$(get_config "repo")
-TOKEN=$(get_config "token")
 INTERVAL=$(get_config "intervallo")
 INTERVAL="${INTERVAL:-600}"
+TOKEN="${GITHUB_TOKEN:-}"
 
 if [ "$REPO" = "utente/nome-repo" ] || [ -z "$TOKEN" ]; then
-    echo "set repo and token in config.ini before running autocommit"
+    echo "set repo in config.ini and GITHUB_TOKEN in .env"
     exit 1
 fi
 
