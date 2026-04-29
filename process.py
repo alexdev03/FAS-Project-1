@@ -5,7 +5,7 @@ import csv
 import os
 import re
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 
 CONFIG = os.path.join(os.path.dirname(__file__), "config.ini")
 DATA   = os.path.join(os.path.dirname(__file__), "data")
@@ -19,21 +19,23 @@ def load_config():
 
 # --- metrics -----------------------------------------------------------------
 
+def sh(cmd):
+    r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
+    return r.stdout.strip()
+
+
 def cpu_load():
-    # /proc/loadavg: 1-min 5-min 15-min ... (simpler than reading /proc/stat twice)
-    with open("/proc/loadavg") as f:
-        return f.read().split()[0]
+    # 1-minute load average from /proc/loadavg
+    return sh("cat /proc/loadavg").split()[0]
 
 
 def ram_usage():
     # grep MemTotal and MemAvailable from /proc/meminfo
-    with open("/proc/meminfo") as f:
-        lines = f.readlines()
-
+    out = sh("grep -E 'MemTotal|MemAvailable' /proc/meminfo")
     info = {}
-    for line in lines:
+    for line in out.splitlines():
         key, val = line.split(":")
-        info[key.strip()] = int(val.strip().split()[0])  # value in kB
+        info[key.strip()] = int(val.strip().split()[0])  # kB
 
     total = info["MemTotal"] // 1024
     used  = (info["MemTotal"] - info["MemAvailable"]) // 1024
@@ -41,28 +43,24 @@ def ram_usage():
 
 
 def disk_usage():
-    # df prints disk usage — grab the percentage on /
-    result = subprocess.run(["df", "/", "--output=pcent"], capture_output=True, text=True)
-    pct = result.stdout.strip().splitlines()[-1].strip().replace("%", "")
-    return int(pct)
+    out = sh("df / --output=pcent")
+    return int(out.splitlines()[-1].strip().replace("%", ""))
 
 
 # --- log errors --------------------------------------------------------------
 
 def grep_errors(regex, n_lines):
-    # use grep to filter journalctl output — same as shown in class
-    journal = subprocess.run(
-        ["journalctl", "-n", str(n_lines), "--no-pager"],
+    r = subprocess.run(
+        ["bash", "-c", f"journalctl -n {n_lines} --no-pager"],
         capture_output=True, text=True
     )
-    if journal.returncode != 0:
+    if r.returncode != 0:
         return []
 
     pattern = re.compile(regex, re.IGNORECASE)
     matches = []
-    for line in journal.stdout.splitlines():
+    for line in r.stdout.splitlines():
         if pattern.search(line):
-            # split on whitespace to get timestamp (first 3 fields) and message
             parts = line.split(None, 4)
             ts  = " ".join(parts[:3]) if len(parts) >= 3 else ""
             msg = parts[4].strip()   if len(parts) >= 5 else line.strip()
@@ -106,11 +104,11 @@ def main():
     regex   = cfg.get("log", "regex",  fallback="error|failed|critical")
     n_lines = cfg.getint("log", "lines", fallback=500)
 
-    ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    load             = cpu_load()
+    load            = cpu_load()
     mem_used, mem_total = ram_usage()
-    disk             = disk_usage()
+    disk            = disk_usage()
 
     append_metrics(ts, load, mem_used, mem_total, disk)
     print(f"[{ts}] load={load} mem={mem_used}/{mem_total}MB disk={disk}%")
